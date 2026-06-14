@@ -1,0 +1,53 @@
+# In-cluster Redis for the Celery broker/result backend (cheapest at low scale;
+# Memorystore Basic 1 GB is the managed upgrade — swap REDIS_URL and delete this).
+# Ephemeral on purpose: Celery state is reconstructable; no PVC needed.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: attendee
+  labels:
+    app: redis
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      nodeSelector:
+        pool: attendee-control
+      containers:
+        - name: redis
+          image: asia-south1-docker.pkg.dev/capturemeet/dockerhub-remote/library/redis:7-alpine
+          args: ["--save", "", "--appendonly", "no"]
+          ports:
+            - containerPort: 6379
+          readinessProbe:
+            tcpSocket:
+              port: 6379
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              memory: "512Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: attendee
+spec:
+  type: ClusterIP
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379

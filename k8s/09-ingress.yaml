@@ -1,0 +1,33 @@
+# GKE-managed Ingress (GCLB) + Google-managed TLS for the Attendee control-plane
+# API + webhook receiver. The managed cert provisions only after the DNS A record
+# for attendee.capturemeet.dev points at the reserved global IP (attendee-ip).
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: attendee-cert
+  namespace: attendee
+spec:
+  domains:
+    - attendee.capturemeet.dev
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: attendee-ingress
+  namespace: attendee
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    kubernetes.io/ingress.global-static-ip-name: "attendee-ip"
+    networking.gke.io/managed-certificates: "attendee-cert"
+spec:
+  rules:
+    - host: attendee.capturemeet.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: attendee-web
+                port:
+                  number: 8000

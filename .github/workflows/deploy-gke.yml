@@ -1,0 +1,62 @@
+name: Deploy Attendee to GKE
+
+# Build the image and roll it out on every push to main. Auth is keyless via
+# Workload Identity Federation: the gha-deploy SA + the github-pool/github-provider
+# are authorized for shreyas-085/{meet_transcriber,attendee}.
+# The image is heavy (Chrome + audio stack, ~6 GB), so it builds on Cloud Build
+# rather than the GitHub runner. Cluster-scoped k8s/bootstrap/ (namespace) is
+# applied once, out of band.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # required for the WIF OIDC token
+
+env:
+  PROJECT_ID: capturemeet
+  IMAGE: asia-south1-docker.pkg.dev/capturemeet/attendee/attendee
+  CLUSTER: meet-cluster
+  ZONE: asia-south1-a
+  NAMESPACE: attendee
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/948098942950/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: gha-deploy@capturemeet.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build & push image (Cloud Build)
+        run: |
+          gcloud builds submit \
+            --tag "$IMAGE:${{ github.sha }}" \
+            --timeout=3600 --machine-type=e2-highcpu-8 .
+
+      - uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.CLUSTER }}
+          location: ${{ env.ZONE }}
+
+      - name: Apply manifests + roll out
+        run: |
+          # Pin this build's SHA into image tags, the bot-image CUBER_RELEASE_VERSION,
+          # and the migrate Job name. `kubectl apply -f k8s/` is non-recursive, so the
+          # cluster-scoped k8s/bootstrap/ (namespace) is skipped (applied once by hand).
+          sed -i "s/GITSHA/${{ github.sha }}/g" k8s/*.yaml
+          kubectl apply -f k8s/
+          kubectl -n "$NAMESPACE" wait --for=condition=complete \
+            job/attendee-migrate-${{ github.sha }} --timeout=300s
+          kubectl -n "$NAMESPACE" rollout status deployment/attendee-web --timeout=300s
+          kubectl -n "$NAMESPACE" rollout status deployment/attendee-worker --timeout=300s
+          kubectl -n "$NAMESPACE" rollout status deployment/attendee-scheduler --timeout=300s

@@ -1,0 +1,88 @@
+# Attendee Django web (gunicorn). Mounts the CSI volume → triggers the Secret
+# Manager → `app-secrets` sync that the worker/scheduler/bot pods also consume.
+# image :GITSHA is replaced per-commit by CI.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: attendee-web
+  namespace: attendee
+  labels:
+    app: attendee-web
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: attendee-web
+  template:
+    metadata:
+      labels:
+        app: attendee-web
+    spec:
+      serviceAccountName: attendee-app
+      enableServiceLinks: false
+      nodeSelector:
+        pool: attendee-control
+      containers:
+        - name: web
+          image: asia-south1-docker.pkg.dev/capturemeet/attendee/attendee:GITSHA
+          args: ["bash", "-c", "python manage.py collectstatic --noinput && exec gunicorn attendee.wsgi --bind 0.0.0.0:8000 --workers 3 --timeout 120"]
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: env
+            - secretRef:
+                name: app-secrets
+          volumeMounts:
+            - name: secrets-store
+              mountPath: /mnt/secrets-store
+              readOnly: true
+          startupProbe:
+            httpGet:
+              path: /health/
+              port: 8000
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /health/
+              port: 8000
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/
+              port: 8000
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "768Mi"
+            limits:
+              memory: "1536Mi"
+      volumes:
+        - name: secrets-store
+          csi:
+            driver: secrets-store-gke.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: attendee-secrets
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: attendee-web
+  namespace: attendee
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+spec:
+  type: ClusterIP
+  selector:
+    app: attendee-web
+  ports:
+    - port: 8000
+      targetPort: 8000

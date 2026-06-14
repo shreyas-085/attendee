@@ -1,0 +1,50 @@
+# Scheduler daemon — polls for scheduled bots (default 60s). Single replica.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: attendee-scheduler
+  namespace: attendee
+  labels:
+    app: attendee-scheduler
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: attendee-scheduler
+  template:
+    metadata:
+      labels:
+        app: attendee-scheduler
+    spec:
+      serviceAccountName: attendee-app
+      enableServiceLinks: false
+      nodeSelector:
+        pool: attendee-control
+      containers:
+        - name: scheduler
+          image: asia-south1-docker.pkg.dev/capturemeet/attendee/attendee:GITSHA
+          args: ["python", "manage.py", "run_scheduler"]
+          envFrom:
+            - configMapRef:
+                name: env
+            - secretRef:
+                name: app-secrets
+          volumeMounts:
+            - name: secrets-store
+              mountPath: /mnt/secrets-store
+              readOnly: true
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "384Mi"
+            limits:
+              memory: "768Mi"
+      volumes:
+        - name: secrets-store
+          csi:
+            driver: secrets-store-gke.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: attendee-secrets

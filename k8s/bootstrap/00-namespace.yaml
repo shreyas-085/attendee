@@ -1,0 +1,6 @@
+# One-time bootstrap (applied out of band, not by CI). Creates the namespace that
+# holds the Attendee control plane AND the dynamically-launched bot pods.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: attendee

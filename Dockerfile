@@ -1,4 +1,6 @@
-FROM --platform=linux/amd64 ubuntu:22.04 AS base
+# Base pulled via our GAR pull-through cache (dockerhub-remote) to avoid Docker Hub
+# rate limits — same pattern as the meet_transcriber image.
+FROM --platform=linux/amd64 asia-south1-docker.pkg.dev/capturemeet/dockerhub-remote/library/ubuntu:22.04 AS base
 
 SHELL ["/bin/bash", "-c"]
 
@@ -120,7 +122,10 @@ ENV cwd=/$project
 WORKDIR $cwd
 
 # Copy only what you need; set ownership/perm at copy time
-COPY --chown=app:app --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
+# COPY --chmod requires BuildKit; Cloud Build's legacy builder lacks it, so set the
+# mode in a separate RUN instead.
+COPY --chown=app:app entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 0755 /usr/local/bin/entrypoint.sh
 COPY --chown=app:app . .
 
 # Make STATIC_ROOT writeable for the non-root user so collectstatic can run at startup

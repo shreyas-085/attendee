@@ -1,0 +1,50 @@
+# DB migrate + collectstatic, run once per deploy. Name carries GITSHA (CI seds it)
+# so each rollout creates a fresh, immutable Job; ttl cleans finished ones up.
+# Attendee has no auto-create — this must succeed before the new web pods serve.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: attendee-migrate-GITSHA
+  namespace: attendee
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: attendee-migrate
+    spec:
+      serviceAccountName: attendee-app
+      enableServiceLinks: false
+      nodeSelector:
+        pool: attendee-control
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: asia-south1-docker.pkg.dev/capturemeet/attendee/attendee:GITSHA
+          args:
+            - "bash"
+            - "-c"
+            - "python manage.py migrate --noinput && python manage.py collectstatic --noinput"
+          envFrom:
+            - configMapRef:
+                name: env
+            - secretRef:
+                name: app-secrets
+          volumeMounts:
+            - name: secrets-store
+              mountPath: /mnt/secrets-store
+              readOnly: true
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              memory: "1Gi"
+      volumes:
+        - name: secrets-store
+          csi:
+            driver: secrets-store-gke.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: attendee-secrets

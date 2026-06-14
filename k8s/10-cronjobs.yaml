@@ -1,0 +1,104 @@
+# Periodic maintenance. Upstream Attendee ships these as management commands and
+# expects the operator to schedule them (their heroku.yml only defines web+worker).
+# On GKE we run them as CronJobs:
+#   • clean-up-completed-bot-pods — deletes Succeeded `bot-pod-*` pods (they otherwise
+#     linger in Completed and accumulate on the bots pool).
+#   • clean-up-stuck-bots — fails/cleans bots that timed out or never launched.
+# Both run on the control pool, use the bot-pod-creator RBAC + DB/secret env.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: clean-up-completed-bot-pods
+  namespace: attendee
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 240
+      template:
+        spec:
+          serviceAccountName: attendee-app
+          enableServiceLinks: false
+          nodeSelector:
+            pool: attendee-control
+          restartPolicy: Never
+          containers:
+            - name: cleanup
+              image: asia-south1-docker.pkg.dev/capturemeet/attendee/attendee:GITSHA
+              args: ["python", "manage.py", "clean_up_completed_bot_pods"]
+              envFrom:
+                - configMapRef:
+                    name: env
+                - secretRef:
+                    name: app-secrets
+              volumeMounts:
+                - name: secrets-store
+                  mountPath: /mnt/secrets-store
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "256Mi"
+                limits:
+                  memory: "512Mi"
+          volumes:
+            - name: secrets-store
+              csi:
+                driver: secrets-store-gke.csi.k8s.io
+                readOnly: true
+                volumeAttributes:
+                  secretProviderClass: attendee-secrets
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: clean-up-stuck-bots
+  namespace: attendee
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 240
+      template:
+        spec:
+          serviceAccountName: attendee-app
+          enableServiceLinks: false
+          nodeSelector:
+            pool: attendee-control
+          restartPolicy: Never
+          containers:
+            - name: cleanup
+              image: asia-south1-docker.pkg.dev/capturemeet/attendee/attendee:GITSHA
+              args: ["python", "manage.py", "clean_up_bots_with_heartbeat_timeout_or_that_never_launched"]
+              envFrom:
+                - configMapRef:
+                    name: env
+                - secretRef:
+                    name: app-secrets
+              volumeMounts:
+                - name: secrets-store
+                  mountPath: /mnt/secrets-store
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "256Mi"
+                limits:
+                  memory: "512Mi"
+          volumes:
+            - name: secrets-store
+              csi:
+                driver: secrets-store-gke.csi.k8s.io
+                readOnly: true
+                volumeAttributes:
+                  secretProviderClass: attendee-secrets

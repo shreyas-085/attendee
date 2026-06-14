@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 import copy
 import os
+from datetime import timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -274,6 +275,25 @@ if STORAGE_PROTOCOL == "azure":
 
     AUDIO_CHUNK_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
     AUDIO_CHUNK_STORAGE_BACKEND["OPTIONS"]["azure_container"] = AZURE_AUDIO_CHUNK_STORAGE_CONTAINER_NAME
+elif STORAGE_PROTOCOL == "gcs":
+    # Native Google Cloud Storage via Workload Identity (no keys). Signed download
+    # URLs use the IAM SignBlob API — the runtime SA needs
+    # roles/iam.serviceAccountTokenCreator on itself.
+    GS_RECORDING_BUCKET_NAME = os.getenv("GS_RECORDING_BUCKET_NAME")
+    GS_AUDIO_CHUNK_BUCKET_NAME = os.getenv("GS_AUDIO_CHUNK_BUCKET_NAME") or GS_RECORDING_BUCKET_NAME
+    _GCS_OPTIONS = {
+        "project_id": os.getenv("GS_PROJECT_ID"),
+        "querystring_auth": True,
+        "expiration": timedelta(seconds=int(os.getenv("GS_LINK_EXPIRATION_SECONDS", "1800"))),
+    }
+    DEFAULT_STORAGE_BACKEND = {
+        # Subclass signs V4 URLs via IAM SignBlob (keyless Workload Identity).
+        "BACKEND": "attendee.gcs_signing.SignedGoogleCloudStorage",
+        "OPTIONS": {**_GCS_OPTIONS, "bucket_name": GS_RECORDING_BUCKET_NAME},
+    }
+    RECORDING_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
+    AUDIO_CHUNK_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
+    AUDIO_CHUNK_STORAGE_BACKEND["OPTIONS"]["bucket_name"] = GS_AUDIO_CHUNK_BUCKET_NAME
 else:
     DEFAULT_STORAGE_BACKEND = {
         "BACKEND": "storages.backends.s3.S3Storage",

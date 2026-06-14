@@ -1,0 +1,47 @@
+# Non-secret config. MUST be named `env` — Attendee's bot launcher reads bot-pod
+# env from a ConfigMap named by BOT_POD_CONFIG_MAP_NAME (default `env`) in the bot
+# namespace, so the control plane and the dynamically-created bot pods share this.
+# Secrets live in Secret Manager → synced into the `app-secrets` Secret (03-*.yaml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: env
+  namespace: attendee
+data:
+  DJANGO_SETTINGS_MODULE: "attendee.settings.production-gke"
+  # "*" so kubelet + GCLB health checks (which hit the pod IP as Host) pass; the
+  # public host is still enforced at the ingress, and absolute URLs use SITE_DOMAIN.
+  ALLOWED_HOSTS: "*"
+  CSRF_TRUSTED_ORIGINS: "https://attendee.capturemeet.dev"
+  SITE_DOMAIN: "attendee.capturemeet.dev"
+  EXTERNAL_WEBHOOK_SITE_DOMAIN: "attendee.capturemeet.dev"
+  ATTENDEE_LOG_FORMAT: "json"
+  ATTENDEE_LOG_LEVEL: "INFO"
+
+  # Redis / Celery — in-cluster Redis (05-redis.yaml), plaintext within the VPC.
+  # Do NOT set REDIS_SSL_REQUIREMENTS/DISABLE_REDIS_SSL: either one appends
+  # ?ssl_cert_reqs=... which celery rejects against the redis:// (non-TLS) scheme.
+  REDIS_URL: "redis://redis:6379/0"
+
+  # Bot launcher — one ephemeral pod per meeting, via the k8s API.
+  LAUNCH_BOT_METHOD: "kubernetes"
+  BOT_POD_NAMESPACE: "attendee"
+  BOT_POD_SERVICE_ACCOUNT_NAME: "attendee-app"
+  # Image is tagless here; the launcher appends ":${CUBER_RELEASE_VERSION}".
+  BOT_POD_IMAGE: "asia-south1-docker.pkg.dev/capturemeet/attendee/attendee"
+  # CI replaces GITSHA with the commit SHA (must equal the pushed image tag).
+  CUBER_RELEASE_VERSION: "GITSHA"
+  # Nodes pull from GAR via the node SA → no imagePullSecret needed.
+  DISABLE_BOT_POD_IMAGE_PULL_SECRET: "true"
+  # Land bot pods on the tainted, autoscaled attendee-bots pool (JSON6902 patch).
+  BOT_POD_SPEC_DEFAULT: '[{"op":"add","path":"/spec/nodeSelector","value":{"workload":"bot"}},{"op":"add","path":"/spec/tolerations","value":[{"key":"workload","operator":"Equal","value":"bot","effect":"NoSchedule"}]}]'
+  # Per-bot resources. START at 2 vCPU (below Attendee's 4-core default); re-pin
+  # from a real load test — this sets bot-pool density and cost (analysis §6.2).
+  BOT_CPU_REQUEST: "2"
+  BOT_MEMORY_REQUEST: "4Gi"
+  BOT_MEMORY_LIMIT: "4Gi"
+
+  # Storage — native GCS via Workload Identity (no keys; signed URLs via IAM SignBlob).
+  STORAGE_PROTOCOL: "gcs"
+  GS_PROJECT_ID: "capturemeet"
+  GS_RECORDING_BUCKET_NAME: "capturemeet-attendee-recordings"

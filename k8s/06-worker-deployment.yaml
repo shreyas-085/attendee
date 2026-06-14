@@ -1,0 +1,60 @@
+# Celery worker — runs the bot-launch tasks (which create bot pods via the k8s API)
+# and webhook delivery. Mounts the CSI volume so it can run standalone if web is down.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: attendee-worker
+  namespace: attendee
+  labels:
+    app: attendee-worker
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: attendee-worker
+  template:
+    metadata:
+      labels:
+        app: attendee-worker
+    spec:
+      serviceAccountName: attendee-app
+      enableServiceLinks: false
+      nodeSelector:
+        pool: attendee-control
+      containers:
+        - name: worker
+          image: asia-south1-docker.pkg.dev/capturemeet/attendee/attendee:GITSHA
+          args: ["celery", "-A", "attendee", "worker", "-l", "INFO"]
+          envFrom:
+            - configMapRef:
+                name: env
+            - secretRef:
+                name: app-secrets
+          volumeMounts:
+            - name: secrets-store
+              mountPath: /mnt/secrets-store
+              readOnly: true
+          readinessProbe:
+            exec:
+              command: ["bash", "-c", "celery -A attendee inspect ping -d celery@$HOSTNAME"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "768Mi"
+            limits:
+              memory: "1536Mi"
+      volumes:
+        - name: secrets-store
+          csi:
+            driver: secrets-store-gke.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: attendee-secrets
