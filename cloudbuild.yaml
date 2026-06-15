@@ -1,0 +1,24 @@
+# Cloud Build config for the GKE deploy workflow (.github/workflows/deploy-gke.yml).
+#
+# Unlike CI and local builds (which use the public Dockerfile default), Cloud Build
+# runs in the capturemeet project and is authenticated to Artifact Registry, so it
+# pulls the base image through our GAR pull-through cache (dockerhub-remote) to avoid
+# Docker Hub rate limits. Override happens via the BASE_IMAGE build-arg below.
+#
+# Legacy builder (BuildKit off) on purpose: the daemon's GAR credential helper
+# authenticates the private base-image pull, and the Dockerfile avoids BuildKit-only
+# features (e.g. COPY --chmod).
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --build-arg
+      - BASE_IMAGE=asia-south1-docker.pkg.dev/capturemeet/dockerhub-remote/library/ubuntu:22.04
+      - -t
+      - ${_IMAGE}:${_SHA}
+      - .
+images:
+  - ${_IMAGE}:${_SHA}
+options:
+  machineType: E2_HIGHCPU_8
+timeout: 3600s

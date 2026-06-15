@@ -1,6 +1,9 @@
-# Base pulled via our GAR pull-through cache (dockerhub-remote) to avoid Docker Hub
-# rate limits — same pattern as the meet_transcriber image.
-FROM --platform=linux/amd64 asia-south1-docker.pkg.dev/capturemeet/dockerhub-remote/library/ubuntu:22.04 AS base
+# Default to the public base so CI and local `docker compose build` work without
+# GCP credentials. Cloud Build (the GKE deploy) overrides BASE_IMAGE to our GAR
+# pull-through cache (dockerhub-remote) to dodge Docker Hub rate limits — see
+# cloudbuild.yaml. A private GAR base here would 403 every unauthenticated build.
+ARG BASE_IMAGE=ubuntu:22.04
+FROM --platform=linux/amd64 ${BASE_IMAGE} AS base
 
 SHELL ["/bin/bash", "-c"]
 

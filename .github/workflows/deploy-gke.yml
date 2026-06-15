@@ -38,10 +38,13 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v2
 
       - name: Build & push image (Cloud Build)
+        # cloudbuild.yaml overrides BASE_IMAGE to the GAR pull-through cache (only
+        # Cloud Build is authed to GAR; CI/local use the public Dockerfile default).
         run: |
           gcloud builds submit \
-            --tag "$IMAGE:${{ github.sha }}" \
-            --timeout=3600 --machine-type=e2-highcpu-8 .
+            --config cloudbuild.yaml \
+            --substitutions=_IMAGE="$IMAGE",_SHA="${{ github.sha }}" \
+            .
 
       - uses: google-github-actions/get-gke-credentials@v2
         with:
