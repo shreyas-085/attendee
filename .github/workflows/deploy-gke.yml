@@ -1,6 +1,7 @@
 name: Deploy Attendee to GKE
 
-# Build the image and roll it out on every push to main. Auth is keyless via
+# Build the image and roll it out on manual trigger only (workflow_dispatch) —
+# select the main branch when running it. Auth is keyless via
 # Workload Identity Federation: the gha-deploy SA + the github-pool/github-provider
 # are authorized for shreyas-085/{meet_transcriber,attendee}.
 # The image is heavy (Chrome + audio stack, ~6 GB), so it builds on Cloud Build
@@ -8,8 +9,6 @@ name: Deploy Attendee to GKE
 # applied once, out of band.
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
