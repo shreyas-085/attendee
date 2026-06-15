@@ -40,6 +40,11 @@ jobs:
         # cloudbuild.yaml overrides BASE_IMAGE to the GAR pull-through cache (only
         # Cloud Build is authed to GAR; CI/local use the public Dockerfile default).
         run: |
+          # WIF (external_account) creds carry no quota project, so the Storage API
+          # call that stages source sends no X-Goog-User-Project and 403s with a
+          # "serviceusage.services.use" error. Set it explicitly to capturemeet,
+          # where gha-deploy has roles/serviceusage.serviceUsageConsumer.
+          gcloud config set billing/quota_project "$PROJECT_ID"
           gcloud builds submit \
             --config cloudbuild.yaml \
             --substitutions=_IMAGE="$IMAGE",_SHA="${{ github.sha }}" \
