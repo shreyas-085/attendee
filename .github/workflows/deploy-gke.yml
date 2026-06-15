@@ -4,9 +4,9 @@ name: Deploy Attendee to GKE
 # select the main branch when running it. Auth is keyless via
 # Workload Identity Federation: the gha-deploy SA + the github-pool/github-provider
 # are authorized for shreyas-085/{meet_transcriber,attendee}.
-# The image is heavy (Chrome + audio stack, ~6 GB), so it builds on Cloud Build
-# rather than the GitHub runner. Cluster-scoped k8s/bootstrap/ (namespace) is
-# applied once, out of band.
+# The image builds on the runner and pushes straight to Artifact Registry (same
+# pattern as meet_transcriber); gha-deploy has artifactregistry.writer. Cluster-
+# scoped k8s/bootstrap/ (namespace) is applied once, out of band.
 
 on:
   workflow_dispatch:
@@ -36,19 +36,17 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Build & push image (Cloud Build)
-        # cloudbuild.yaml overrides BASE_IMAGE to the GAR pull-through cache (only
-        # Cloud Build is authed to GAR; CI/local use the public Dockerfile default).
+      - name: Configure Docker auth for Artifact Registry
+        run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
+
+      - name: Build & push image
+        # Builds on the runner (BuildKit). configure-docker above authenticates the
+        # daemon to GAR, so it can both pull the base and push the result. Uses the
+        # public Dockerfile base default (ubuntu:22.04) — no GCP creds needed for it.
         run: |
-          # WIF (external_account) creds carry no quota project, so the Storage API
-          # call that stages source sends no X-Goog-User-Project and 403s with a
-          # "serviceusage.services.use" error. Set it explicitly to capturemeet,
-          # where gha-deploy has roles/serviceusage.serviceUsageConsumer.
-          gcloud config set billing/quota_project "$PROJECT_ID"
-          gcloud builds submit \
-            --config cloudbuild.yaml \
-            --substitutions=_IMAGE="$IMAGE",_SHA="${{ github.sha }}" \
-            .
+          docker build -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:latest" .
+          docker push "$IMAGE:${{ github.sha }}"
+          docker push "$IMAGE:latest"
 
       - uses: google-github-actions/get-gke-credentials@v2
         with:
