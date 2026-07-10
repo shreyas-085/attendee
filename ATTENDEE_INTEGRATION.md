@@ -15,26 +15,19 @@ run a voice agent**.
 
 ## 1. Credentials
 
-> ⚠️ **The value below is a live secret.** Do **not** hard-code it in committed source.
-> Put it in an env var / secret manager (the patterns below read `ATTENDEE_API_KEY`).
-> It can be rotated/disabled any time in the dashboard
-> (`https://attendee.capturemeet.dev` → Settings → API Keys) — Attendee stores only a
-> SHA-256 hash, so this plaintext cannot be recovered later; if lost, mint a new one.
+Auth: every request needs the header `Authorization: Token <API_KEY>`.
 
-| Field | Value |
-|---|---|
-| API key | `<PROVISIONED — retrieve from your secret store; not committed>` |
-| API key id | `key_mafOJaPQZDWWRRbi` |
-| Project | `ringg` (`proj_eMz5OJdY1ZSOIRCa`), org `lynkk` |
-
-> Re-hosted on GKE project `lynkk-502014` (asia-south1). The base URL/domain is
-> unchanged, so consumers only need the new API key below. The previous
-> capturemeet key was invalidated when that deployment was torn down.
+Credentials are **not** stored in this doc. Get the API key, its project id, and the
+per-project webhook signing secret from the Attendee dashboard
+(`https://attendee.capturemeet.dev` → Settings → API Keys / Webhooks) or from your own
+secret store, and inject them via env vars. Attendee stores only a SHA-256 hash of a
+key, so a lost key cannot be recovered — mint a new one.
 
 ```bash
-# consumer service .env  (do NOT commit real values)
+# consumer service .env  (fill from your secret store — do NOT commit real values)
 ATTENDEE_BASE_URL=https://attendee.capturemeet.dev
-ATTENDEE_API_KEY=<PROVISIONED — retrieve from your secret store; not committed>
+ATTENDEE_API_KEY=            # from dashboard → Settings → API Keys
+ATTENDEE_WEBHOOK_SECRET=     # per-project, from dashboard → Settings → Webhooks
 ```
 
 Every API key is scoped to one Project. Bots, transcripts, recordings, calendars,
