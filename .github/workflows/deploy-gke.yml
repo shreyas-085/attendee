@@ -2,11 +2,17 @@ name: Deploy Attendee to GKE
 
 # Build the image and roll it out on manual trigger only (workflow_dispatch) —
 # select the main branch when running it. Auth is keyless via
-# Workload Identity Federation: the gha-deploy SA + the github-pool/github-provider
-# are authorized for shreyas-085/{meet_transcriber,attendee}.
-# The image builds on the runner and pushes straight to Artifact Registry (same
-# pattern as meet_transcriber); gha-deploy has artifactregistry.writer. Cluster-
-# scoped k8s/bootstrap/ (namespace) is applied once, out of band.
+# Workload Identity Federation.
+#
+# ⚠️  CI IS NOT WIRED FOR lynkk-502014 YET. The initial bring-up was done manually
+#     (Cloud Build + kubectl). To enable this workflow you must first provision, in
+#     the lynkk-502014 project: a Workload Identity Pool + provider bound to this
+#     GitHub repo, and a `gha-deploy` SA with roles/artifactregistry.writer +
+#     roles/container.developer, then set the two `with:` values in the auth step
+#     below. Until then, deploy out-of-band per k8s/README.md.
+# The image builds on the runner and pushes straight to Artifact Registry;
+# gha-deploy needs artifactregistry.writer. Cluster-scoped k8s/bootstrap/
+# (namespace) is applied once, out of band.
 
 on:
   workflow_dispatch:
@@ -16,9 +22,9 @@ permissions:
   id-token: write   # required for the WIF OIDC token
 
 env:
-  PROJECT_ID: capturemeet
-  IMAGE: asia-south1-docker.pkg.dev/capturemeet/attendee/attendee
-  CLUSTER: meet-cluster
+  PROJECT_ID: lynkk-502014
+  IMAGE: asia-south1-docker.pkg.dev/lynkk-502014/attendee/attendee
+  CLUSTER: attendee-cluster
   ZONE: asia-south1-a
   NAMESPACE: attendee
 
@@ -31,8 +37,10 @@ jobs:
       - id: auth
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: projects/948098942950/locations/global/workloadIdentityPools/github-pool/providers/github-provider
-          service_account: gha-deploy@capturemeet.iam.gserviceaccount.com
+          # TODO(lynkk): create these in lynkk-502014 before enabling CI.
+          # projects/67856353012/locations/global/workloadIdentityPools/<pool>/providers/<provider>
+          workload_identity_provider: projects/67856353012/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: gha-deploy@lynkk-502014.iam.gserviceaccount.com
 
       - uses: google-github-actions/setup-gcloud@v2
 

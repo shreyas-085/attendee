@@ -29,7 +29,7 @@ spec:
           restartPolicy: Never
           containers:
             - name: cleanup
-              image: asia-south1-docker.pkg.dev/capturemeet/attendee/attendee:GITSHA
+              image: asia-south1-docker.pkg.dev/lynkk-502014/attendee/attendee:GITSHA
               args: ["python", "manage.py", "clean_up_completed_bot_pods"]
               envFrom:
                 - configMapRef:
@@ -78,7 +78,7 @@ spec:
           restartPolicy: Never
           containers:
             - name: cleanup
-              image: asia-south1-docker.pkg.dev/capturemeet/attendee/attendee:GITSHA
+              image: asia-south1-docker.pkg.dev/lynkk-502014/attendee/attendee:GITSHA
               args: ["python", "manage.py", "clean_up_bots_with_heartbeat_timeout_or_that_never_launched"]
               envFrom:
                 - configMapRef:

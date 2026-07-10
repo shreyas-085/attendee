@@ -29,7 +29,7 @@ spec:
         pool: attendee-control
       containers:
         - name: web
-          image: asia-south1-docker.pkg.dev/capturemeet/attendee/attendee:GITSHA
+          image: asia-south1-docker.pkg.dev/lynkk-502014/attendee/attendee:GITSHA
           args: ["bash", "-c", "python manage.py collectstatic --noinput && exec gunicorn attendee.wsgi --bind 0.0.0.0:8000 --workers 3 --timeout 120"]
           ports:
             - containerPort: 8000
@@ -60,7 +60,7 @@ spec:
             periodSeconds: 20
           resources:
             requests:
-              cpu: "250m"
+              cpu: "150m"
               memory: "768Mi"
             limits:
               memory: "1536Mi"

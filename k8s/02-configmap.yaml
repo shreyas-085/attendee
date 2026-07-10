@@ -28,7 +28,7 @@ data:
   BOT_POD_NAMESPACE: "attendee"
   BOT_POD_SERVICE_ACCOUNT_NAME: "attendee-app"
   # Image is tagless here; the launcher appends ":${CUBER_RELEASE_VERSION}".
-  BOT_POD_IMAGE: "asia-south1-docker.pkg.dev/capturemeet/attendee/attendee"
+  BOT_POD_IMAGE: "asia-south1-docker.pkg.dev/lynkk-502014/attendee/attendee"
   # CI replaces GITSHA with the commit SHA (must equal the pushed image tag).
   CUBER_RELEASE_VERSION: "GITSHA"
   # Nodes pull from GAR via the node SA → no imagePullSecret needed.
@@ -43,5 +43,5 @@ data:
 
   # Storage — native GCS via Workload Identity (no keys; signed URLs via IAM SignBlob).
   STORAGE_PROTOCOL: "gcs"
-  GS_PROJECT_ID: "capturemeet"
-  GS_RECORDING_BUCKET_NAME: "capturemeet-attendee-recordings"
+  GS_PROJECT_ID: "lynkk-502014"
+  GS_RECORDING_BUCKET_NAME: "lynkk-attendee-recordings"

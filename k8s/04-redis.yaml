@@ -24,7 +24,7 @@ spec:
         pool: attendee-control
       containers:
         - name: redis
-          image: asia-south1-docker.pkg.dev/capturemeet/dockerhub-remote/library/redis:7-alpine
+          image: mirror.gcr.io/library/redis:7-alpine
           args: ["--save", "", "--appendonly", "no"]
           ports:
             - containerPort: 6379

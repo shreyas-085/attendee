@@ -24,7 +24,7 @@ spec:
         pool: attendee-control
       containers:
         - name: scheduler
-          image: asia-south1-docker.pkg.dev/capturemeet/attendee/attendee:GITSHA
+          image: asia-south1-docker.pkg.dev/lynkk-502014/attendee/attendee:GITSHA
           args: ["python", "manage.py", "run_scheduler"]
           envFrom:
             - configMapRef:
@@ -37,7 +37,7 @@ spec:
               readOnly: true
           resources:
             requests:
-              cpu: "100m"
+              cpu: "50m"
               memory: "384Mi"
             limits:
               memory: "768Mi"

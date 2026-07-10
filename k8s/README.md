@@ -1,103 +1,101 @@
 # Attendee on GKE — deployment runbook
 
-Self-hosts Attendee as a **separate service** on the existing `meet-cluster`
-(`capturemeet` / `asia-south1`), alongside MeetingBaas. Mirrors the meet_transcriber
-ops stack (raw manifests + `kubectl` + Workload Identity, Secret Manager CSI, GAR).
-Covers **both** recording and the 2-way conversation bot. STT stays in
-meet_transcriber (Ringg) — Attendee's transcription is not relied on.
+Self-hosts Attendee on a **dedicated, cost-minimal GKE cluster** in project
+`lynkk-502014` / `asia-south1`. Serves the control-plane API + webhook receiver at
+`https://attendee.capturemeet.dev` and launches one ephemeral bot pod per meeting for
+recording + 2-way conversation. Raw manifests + `kubectl` + Workload Identity, GKE
+Secret Manager add-on, and Artifact Registry.
 
-## Architecture
+## Architecture (minimal / low-traffic sizing)
 
-- **Control plane** (`attendee-control` pool, `e2-standard-4`): `attendee-web`
-  (gunicorn), `attendee-worker` (celery), `attendee-scheduler`, `redis`.
-- **Bot pods** (`attendee-bots` pool, autoscaled `n2-standard-16`, tainted): one
-  ephemeral pod per meeting, created by the control plane via the k8s API
-  (`LAUNCH_BOT_METHOD=kubernetes`), torn down at meeting end. Targeted onto the pool
-  by the `BOT_POD_SPEC_DEFAULT` nodeSelector/toleration patch in `02-configmap.yaml`.
-- **Postgres**: Cloud SQL `attendee-pg` on a **private IP**, direct `sslmode=require`
-  (no proxy — works for the dynamic bot pods too).
-- **Redis**: in-cluster (`04-redis.yaml`).
+- **Cluster**: zonal `attendee-cluster` (`asia-south1-a`). One zonal cluster is free
+  per billing account. Workload Identity + the GKE Secret Manager add-on enabled.
+- **Control plane** (`pool=attendee-control`, `e2-standard-2` ×1): `attendee-web`
+  (gunicorn), `attendee-worker` (celery), `attendee-scheduler`, `redis` (in-cluster).
+- **Bot pods** (`attendee-bots` pool, `e2-standard-4`, autoscaled **min 0 / max 2**,
+  tainted): one ephemeral pod per meeting, created by the control plane via the k8s
+  API (`LAUNCH_BOT_METHOD=kubernetes`), torn down at meeting end. The pool **scales to
+  zero** between meetings, so there is no idle bot-node cost. Pods are targeted onto
+  the pool by the `BOT_POD_SPEC_DEFAULT` nodeSelector/toleration patch in
+  `02-configmap.yaml`.
+- **Postgres**: Cloud SQL `attendee-pg` (`db-g1-small`, 10 GB) on a **private IP**,
+  direct `sslmode=require` (no proxy — works for the dynamic bot pods too).
+- **Redis**: in-cluster (`04-redis.yaml`), image from `mirror.gcr.io` (no Docker Hub
+  rate limits, no pull-through repo to maintain).
 - **Storage**: native GCS via Workload Identity (no keys; signed URLs via IAM
-  SignBlob). Attendee is patched with a django-storages GCS backend (`base.py`,
-  `STORAGE_PROTOCOL=gcs`) since the org policy blocks SA/HMAC keys. The final
-  recording mp4 uploads via a `gcs` peer to Attendee's azure/s3 uploaders
-  (`bots/bot_controller/gcs_file_uploader.py`).
-- **Maintenance**: `k8s/10-cronjobs.yaml` reaps completed bot pods + stuck bots
-  every 5 min (upstream ships these as commands but doesn't schedule them).
-- **CI/CD**: `.github/workflows/deploy-gke.yml` builds on Cloud Build and rolls out
-  on push to `main` (WIF authorized for `shreyas-085/{meet_transcriber,attendee}`).
+  SignBlob). `STORAGE_PROTOCOL=gcs`; final recording mp4 uploads via a `gcs` peer to
+  Attendee's azure/s3 uploaders (`bots/bot_controller/gcs_file_uploader.py`).
+- **Maintenance**: `10-cronjobs.yaml` reaps completed bot pods + stuck bots every 5 min.
 
 ## One-time bring-up
 
-1. **Provision GCP infra** — review then run section-by-section:
+1. **Provision GCP infra** — review then run section-by-section (as `admin@lynkk.ai`):
    ```bash
    ./k8s/provision.sh
    ```
    Captures: Artifact Registry repo, GCS bucket, `attendee-app` SA + IAM + Workload
-   Identity (+ self serviceAccountTokenCreator for signed URLs), Cloud SQL private-IP
-   Postgres, Secret Manager secrets, the two node pools, and the global static IP.
+   Identity (+ self serviceAccountTokenCreator for signed URLs), the default-compute
+   SA's `cloudbuild.builds.builder` (Cloud Build + node image pull), VPC peering +
+   private-IP Cloud SQL, Secret Manager secrets, the dedicated cluster + two node
+   pools, and the global static IP.
    **Manual sub-step it prints:** point the `attendee.capturemeet.dev` DNS A record at
    the static IP (needed before the managed cert provisions).
 
 2. **Cluster-scoped bootstrap** (once):
    ```bash
+   gcloud container clusters get-credentials attendee-cluster --zone asia-south1-a
    kubectl apply -f k8s/bootstrap/      # namespace
    ```
-   The Secret Manager CSI sync ClusterRole/Binding is already present cluster-wide
-   (applied for meet_transcriber) — it covers the `attendee` namespace too.
 
-3. **Build & push the image** (manual until CI WIF is authorized for this repo):
+3. **Build & push the image** (Cloud Build; uses the Dockerfile's public ubuntu base):
    ```bash
    SHA=$(git rev-parse --short HEAD)
-   IMG=asia-south1-docker.pkg.dev/capturemeet/attendee/attendee
-   gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
-   docker build -t "$IMG:$SHA" -t "$IMG:latest" .
-   docker push "$IMG:$SHA"; docker push "$IMG:latest"
+   IMG=asia-south1-docker.pkg.dev/lynkk-502014/attendee/attendee
+   gcloud builds submit --tag "$IMG:$SHA" --timeout=3600 .
    ```
 
-4. **Deploy** (pin the SHA into image tags, `CUBER_RELEASE_VERSION`, and the migrate
+4. **Create the `app-secrets` K8s Secret** from Secret Manager (the GKE add-on
+   mounts secrets as files but does not sync them into a K8s Secret — see
+   `03-secretproviderclass.yaml`). Must exist before the pods start:
+   ```bash
+   ./k8s/create-app-secrets.sh      # idempotent; re-run after rotating a secret
+   ```
+
+5. **Deploy** (pin the SHA into image tags, `CUBER_RELEASE_VERSION`, and the migrate
    Job name, then apply):
    ```bash
-   gcloud container clusters get-credentials meet-cluster --zone asia-south1-a
    sed -i '' "s/GITSHA/$SHA/g" k8s/*.yaml      # macOS sed; use sed -i on Linux/CI
    kubectl apply -f k8s/
-   kubectl -n attendee wait --for=condition=complete job/attendee-migrate-$SHA --timeout=300s
-   kubectl -n attendee rollout status deployment/attendee-web --timeout=300s
+   kubectl -n attendee wait --for=condition=complete job/attendee-migrate-$SHA --timeout=600s
+   kubectl -n attendee rollout status deployment/attendee-web --timeout=600s
    ```
 
-5. **First admin user / API key** (for testing): `kubectl -n attendee exec deploy/attendee-web
-   -- python manage.py createsuperuser`, then create a project + API key in the admin UI
-   at `https://attendee.capturemeet.dev`.
+6. **First admin user / API key** (for testing): create a superuser + a project/API key
+   via `python manage.py shell` (see `TEST_PLAN.md` step 2), then manage them in the
+   admin UI at `https://attendee.capturemeet.dev` once DNS + cert are live.
 
 ## Validation (deployment acceptance)
 
 - `kubectl -n attendee get deploy,po,svc,ingress,job` healthy; cert `Active`;
   `https://attendee.capturemeet.dev/health/` → 200.
 - `POST /api/v1/bots` (recording) → a bot pod appears on `attendee-bots`
-  (`kubectl get po -n attendee -o wide`), joins a test Google Meet, recording lands in
-  `gs://capturemeet-attendee-recordings`, pod deleted at end.
+  (`kubectl get po -n attendee -o wide`; the pool scales 0→1), joins a test Google
+  Meet, recording lands in `gs://lynkk-attendee-recordings`, pod deleted at end, node
+  scales back to 0.
 - **2-way**: bot-create with `websocket_settings.audio.url=wss://…` against a test WS
   echo → inbound `realtime_audio.mixed`, accepted `realtime_audio.bot_output`.
-- Drive >1 node of concurrency → autoscaler adds a bot node, then scales down.
-- Measure real per-bot CPU/RAM → set `BOT_CPU_REQUEST` and re-pin the bot node size.
 
 ## Open items / gotchas
 
+- **Cost**: idle cost is one `e2-standard-2` control node + `db-g1-small` + the GCLB
+  forwarding rule + static IP. The bot pool is min-0, so bot nodes only exist during
+  meetings. Scale up (`n2` bots, more control CPU) only after a load test.
 - **DB SSL**: `production-gke.py` forces `ssl_require=True`; the private-IP design
-  satisfies it (real TLS to Cloud SQL). If you ever switch to a localhost proxy, that
-  flag will break the plaintext localhost hop.
-- **Bot CPU default is 4 cores** in Attendee; we start at `BOT_CPU_REQUEST=2` — confirm
-  via load test (drives bot-pool density + cost).
-- **CI**: wired — `deploy-gke.yml` builds on Cloud Build + rolls out on push to
-  `main`. The manual steps above remain valid for out-of-band deploys.
+  satisfies it (real TLS to Cloud SQL).
+- **Bot resources**: `BOT_CPU_REQUEST=2`, `BOT_MEMORY_REQUEST=4Gi` → one bot per
+  `e2-standard-4` node. Re-pin from a real load test.
 - **Transcription**: send `transcription_settings={"meeting_closed_captions": {}}` on
-  bot-create (no 3rd-party STT) — we transcribe the recording with Ringg downstream.
-- **`n2-standard-16`** must be available in `asia-south1-a`; else switch the bot pool
-  to `n2`/`e2` in `provision.sh`.
-
-## meet_transcriber integration — separate task
-
-Not done here. Needs: `AttendeeProvider(BotProvider, SpeakingBotProvider)` +
-`build_provider` branch + `ATTENDEE_*` settings; an Attendee webhook route; a pipecat
-serializer for Attendee's `realtime_audio.*` frames; and per-user `bot_provider` routing
-(mirror `stt_provider`). Contract is mapped in the plan.
+  bot-create if you don't want a 3rd-party STT provider.
+- **CI**: `.github/workflows/deploy-gke.yml` is present but **not wired** for
+  lynkk-502014 — it needs a WIF pool + `gha-deploy` SA in the project first. Until
+  then, deploy out-of-band with the steps above.

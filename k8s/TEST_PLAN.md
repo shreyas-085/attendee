@@ -93,7 +93,7 @@ watch -n 3 "curl -s -H 'Authorization: Token $TOKEN' $BASE/api/v1/bots/$BOT_ID \
 ```bash
 curl -s -H "Authorization: Token $TOKEN" $BASE/api/v1/bots/$BOT_ID/recording | tee /tmp/rec.json
 # -> {"url":"https://storage.googleapis.com/...X-Goog-Signature...", "start_timestamp_ms":...}
-gcloud storage ls -l "gs://capturemeet-attendee-recordings/" --recursive | tail
+gcloud storage ls -l "gs://lynkk-attendee-recordings/" --recursive | tail
 ```
 
 **4g. Verify speaker data** (this is the diarization-with-real-names our integration maps to):

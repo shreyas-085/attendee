@@ -21,7 +21,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: migrate
-          image: asia-south1-docker.pkg.dev/capturemeet/attendee/attendee:GITSHA
+          image: asia-south1-docker.pkg.dev/lynkk-502014/attendee/attendee:GITSHA
           args:
             - "bash"
             - "-c"
@@ -37,7 +37,7 @@ spec:
               readOnly: true
           resources:
             requests:
-              cpu: "250m"
+              cpu: "100m"
               memory: "512Mi"
             limits:
               memory: "1Gi"
