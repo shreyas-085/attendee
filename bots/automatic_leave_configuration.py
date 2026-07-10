@@ -1,4 +1,6 @@
+import time
 from dataclasses import dataclass
+from datetime import datetime
 
 
 @dataclass(frozen=True)
@@ -15,6 +17,7 @@ class AutomaticLeaveConfiguration:
         enable_closed_captions_timeout_seconds: Number of seconds to wait before leaving if bot could not enable closed captions (infinite by default)
         authorized_user_not_in_meeting_timeout_seconds: Number of seconds to wait before leaving if the authorized user is not in the meeting. Only relevant if this is a Zoom bot using the on behalf of token.
         bot_keywords: List of keywords to identify bot participants. A participant is considered a bot if any word in their name matches a keyword (case-insensitive).
+        scheduled_meeting_end_time: End time of the linked calendar event, if any. While this is in the future the bot suppresses the silence and only-participant auto-leaves so it stays for the whole scheduled meeting. Server-derived (not a client-facing setting); None for ad-hoc bots.
     """
 
     silence_timeout_seconds: int = 600
@@ -26,3 +29,16 @@ class AutomaticLeaveConfiguration:
     enable_closed_captions_timeout_seconds: int | None = None
     authorized_user_not_in_meeting_timeout_seconds: int = 600
     bot_keywords: list[str] | None = None
+    scheduled_meeting_end_time: datetime | None = None
+
+    def before_scheduled_meeting_end(self, now: float | None = None) -> bool:
+        """True while the meeting's scheduled end time hasn't passed yet.
+
+        The bot uses this to avoid leaving early (on silence or when briefly the
+        only participant) before a scheduled meeting is really over. Returns
+        False when no scheduled end is known, preserving the prior behavior.
+        """
+        if self.scheduled_meeting_end_time is None:
+            return False
+        ref = time.time() if now is None else now
+        return ref < self.scheduled_meeting_end_time.timestamp()

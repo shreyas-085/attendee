@@ -704,7 +704,17 @@ class BotController:
         self.pubsub = None
         self.pubsub_channel = f"bot_{self.bot_in_db.id}"
 
-        self.automatic_leave_configuration = AutomaticLeaveConfiguration(**self.bot_in_db.automatic_leave_settings())
+        # When the bot is tied to a calendar event, hand its scheduled end time to
+        # the leave config so the bot stays for the whole meeting instead of leaving
+        # early on silence / being briefly the only participant. Ad-hoc bots (no
+        # linked event) keep scheduled_meeting_end_time=None and behave as before.
+        automatic_leave_settings = self.bot_in_db.automatic_leave_settings()
+        calendar_event = self.bot_in_db.calendar_event
+        scheduled_meeting_end_time = calendar_event.end_time if calendar_event else None
+        self.automatic_leave_configuration = AutomaticLeaveConfiguration(
+            **automatic_leave_settings,
+            scheduled_meeting_end_time=scheduled_meeting_end_time,
+        )
 
         self.per_participant_realtime_video_configuration = PerParticipantRealtimeVideoConfiguration(
             webcam_configuration=PerParticipantRealtimeVideoSourceConfiguration(resolution=self.bot_in_db.websocket_per_participant_video_webcam_resolution()),

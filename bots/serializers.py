@@ -1620,8 +1620,12 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
     automatic_leave_settings = AutomaticLeaveSettingsJSONField(default=dict, required=False)
 
     def validate_automatic_leave_settings(self, value):
-        # Set default values if not provided
+        # Set default values if not provided. scheduled_meeting_end_time is derived
+        # server-side from the linked calendar event (not a client-supplied setting),
+        # so it's excluded from the accepted keys and never stored on the bot — the
+        # bot controller injects it separately at runtime.
         defaults = asdict(AutomaticLeaveConfiguration())
+        defaults.pop("scheduled_meeting_end_time", None)
 
         # Validate that an unexpected key is not provided
         for key in value.keys():
