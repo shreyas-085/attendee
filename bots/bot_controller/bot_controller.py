@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import signal
+import subprocess
 import threading
 import time
 import traceback
@@ -543,6 +544,61 @@ class BotController:
             return f"{settings.RECORDING_USER_FOLDER}/{user_id}/{name}"
         return name
 
+    def get_audio_recording_filename(self):
+        """Object key for the extracted audio track — same path as the video with a
+        .m4a extension (in the separate audio bucket)."""
+        root, _ext = os.path.splitext(self.get_recording_filename())
+        return f"{root}.m4a"
+
+    def upload_audio_recording_if_enabled(self):
+        """Extract the audio track from the finished video and upload it to the audio
+        bucket for transcription (small + fast to fetch vs. the full video).
+
+        Best-effort: any failure just leaves audio_file unset and the consumer falls back
+        to transcribing the video. Only for GCS video recordings (audio-only recordings are
+        already a small standalone file)."""
+        if settings.STORAGE_PROTOCOL != "gcs":
+            return
+        video_path = self.get_recording_file_location()
+        if not video_path or not os.path.exists(video_path):
+            return
+        # Audio-only recordings have no separate video track to strip.
+        if not (self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video):
+            return
+
+        local_audio_path = f"{os.path.splitext(video_path)[0]}.m4a"
+        if not self._extract_audio_track(video_path, local_audio_path):
+            return
+        try:
+            audio_key = self.get_audio_recording_filename()
+            uploader = GcsFileUploader(bucket=settings.GS_AUDIO_RECORDING_BUCKET_NAME, filename=audio_key)
+            uploader.upload_file(local_audio_path)
+            uploader.wait_for_upload()
+            recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
+            recording.audio_file = audio_key
+            recording.save(update_fields=["audio_file", "updated_at", "version"])
+            logger.info(f"Uploaded extracted audio to gs://{settings.GS_AUDIO_RECORDING_BUCKET_NAME}/{audio_key}")
+        except Exception:
+            logger.exception("Failed to upload extracted audio recording")
+        finally:
+            try:
+                if os.path.exists(local_audio_path):
+                    os.remove(local_audio_path)
+            except Exception:
+                logger.exception("Failed to delete local extracted audio file")
+
+    def _extract_audio_track(self, video_path, audio_path):
+        """Strip the audio track into an .m4a. Stream-copies the existing AAC track (near
+        instant, no re-encode); re-encodes to AAC only if the copy fails. Returns True on
+        success."""
+        for audio_codec in ("copy", "aac"):
+            cmd = ["ffmpeg", "-y", "-nostdin", "-i", video_path, "-vn", "-c:a", audio_codec, "-movflags", "+faststart", audio_path]
+            result = subprocess.run(cmd, capture_output=True)
+            if result.returncode == 0 and os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
+                return True
+            logger.warning(f"Audio extraction with -c:a {audio_codec} failed: {(result.stderr or b'')[-400:]!r}")
+        return False
+
     def on_rtmp_connection_failed(self):
         logger.info("RTMP connection failed")
         BotEventManager.create_event(
@@ -679,6 +735,10 @@ class BotController:
 
         if self.get_recording_file_location():
             self.upload_recording_to_external_media_storage_if_enabled()
+
+            # Extract + upload the small audio track (for fast transcription) while the local
+            # video file is still present, before it gets uploaded/deleted below.
+            self.upload_audio_recording_if_enabled()
 
             streamed = False
             if self.recording_stream_uploader:

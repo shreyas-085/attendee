@@ -1820,10 +1820,16 @@ class TranscriptUtteranceSerializer(serializers.Serializer):
 )
 class RecordingSerializer(serializers.ModelSerializer):
     start_timestamp_ms = serializers.IntegerField(source="first_buffer_timestamp_ms")
+    # Signed URL for the small extracted audio track (for transcription); null when no
+    # separate audio was produced — consumers fall back to `url` (the video).
+    audio_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Recording
-        fields = ["url", "start_timestamp_ms"]
+        fields = ["url", "audio_url", "start_timestamp_ms"]
+
+    def get_audio_url(self, obj):
+        return obj.audio_url
 
 
 @extend_schema_field(

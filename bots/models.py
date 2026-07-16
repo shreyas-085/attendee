@@ -2290,6 +2290,11 @@ class Recording(models.Model):
 
     file = models.FileField(storage=RecordingStorage())
 
+    # Small audio-only track (extracted from the video) kept in a separate bucket and
+    # used for transcription — much faster to fetch / lower egress than the full video.
+    # Null when no separate audio was produced (audio-only recordings, or extraction off).
+    audio_file = models.FileField(storage=StorageAlias("audio_recordings"), null=True, blank=True)
+
     def __str__(self):
         return f"Recording for {self.bot.object_id}"
 
@@ -2307,6 +2312,13 @@ class Recording(models.Model):
             Params={"Bucket": self.file.storage.bucket_name, "Key": self.file.name},
             ExpiresIn=1800,
         )
+
+    @property
+    def audio_url(self):
+        """Short-lived signed URL for the extracted audio track, or None if absent."""
+        if not self.audio_file.name:
+            return None
+        return remote_storage_url(self.audio_file)
 
     OBJECT_ID_PREFIX = "rec_"
     object_id = models.CharField(max_length=32, unique=True, editable=False)

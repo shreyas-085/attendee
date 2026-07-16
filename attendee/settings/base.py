@@ -281,6 +281,10 @@ elif STORAGE_PROTOCOL == "gcs":
     # roles/iam.serviceAccountTokenCreator on itself.
     GS_RECORDING_BUCKET_NAME = os.getenv("GS_RECORDING_BUCKET_NAME")
     GS_AUDIO_CHUNK_BUCKET_NAME = os.getenv("GS_AUDIO_CHUNK_BUCKET_NAME") or GS_RECORDING_BUCKET_NAME
+    # Separate bucket holding the small extracted audio-only track used for transcription
+    # (fast to fetch, low egress vs. the full video). Falls back to the recording bucket
+    # if unset. See Recording.audio_file / bot_controller audio extraction.
+    GS_AUDIO_RECORDING_BUCKET_NAME = os.getenv("GS_AUDIO_RECORDING_BUCKET_NAME") or GS_RECORDING_BUCKET_NAME
     _GCS_OPTIONS = {
         "project_id": os.getenv("GS_PROJECT_ID"),
         "querystring_auth": True,
@@ -294,6 +298,8 @@ elif STORAGE_PROTOCOL == "gcs":
     RECORDING_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
     AUDIO_CHUNK_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
     AUDIO_CHUNK_STORAGE_BACKEND["OPTIONS"]["bucket_name"] = GS_AUDIO_CHUNK_BUCKET_NAME
+    AUDIO_RECORDING_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
+    AUDIO_RECORDING_STORAGE_BACKEND["OPTIONS"]["bucket_name"] = GS_AUDIO_RECORDING_BUCKET_NAME
 else:
     DEFAULT_STORAGE_BACKEND = {
         "BACKEND": "storages.backends.s3.S3Storage",
@@ -311,11 +317,19 @@ else:
     AUDIO_CHUNK_STORAGE_BACKEND["OPTIONS"]["bucket_name"] = AWS_AUDIO_CHUNK_STORAGE_BUCKET_NAME
 
 
+# Non-gcs protocols don't define a dedicated audio-recording backend; fall back to the
+# recording backend so the "audio_recordings" storage alias always resolves.
+try:
+    AUDIO_RECORDING_STORAGE_BACKEND
+except NameError:
+    AUDIO_RECORDING_STORAGE_BACKEND = RECORDING_STORAGE_BACKEND
+
 STORAGES = {
     "default": DEFAULT_STORAGE_BACKEND,
     "recordings": RECORDING_STORAGE_BACKEND,
     "bot_debug_screenshots": RECORDING_STORAGE_BACKEND,
     "audio_chunks": AUDIO_CHUNK_STORAGE_BACKEND,
+    "audio_recordings": AUDIO_RECORDING_STORAGE_BACKEND,
     "staticfiles": {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },
