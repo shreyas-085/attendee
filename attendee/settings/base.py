@@ -324,6 +324,33 @@ AWS_S3_SIGNATURE_VERSION = "s3v4"
 if os.getenv("USE_IRSA_FOR_S3_STORAGE", "false") == "true":
     AWS_S3_ADDRESSING_STYLE = "virtual"
 
+# --- Meet recording: video compression + parallel-upload-while-recording ---
+# When enabled (gcs protocol only) the screen-capture recording is written as a
+# fragmented MP4 and streamed to GCS via a resumable upload *during* the meeting,
+# so the object is finalized within seconds of the meeting ending instead of after
+# a full end-of-meeting upload. Falls back to the blocking end-of-meeting uploader
+# when disabled or if the streaming upload fails.
+ENABLE_STREAMING_RECORDING_UPLOAD = os.getenv("ENABLE_STREAMING_RECORDING_UPLOAD", "false") == "true"
+# Each non-final resumable chunk must be a multiple of 256 KiB (GCS requirement).
+RECORDING_STREAM_UPLOAD_CHUNK_SIZE = int(os.getenv("RECORDING_STREAM_UPLOAD_CHUNK_SIZE", str(16 * 1024 * 1024)))
+
+# Balanced x264 compression for the FFmpeg screen-capture path. Defaults trade a
+# little encode CPU for a large file-size reduction vs. the old unbounded
+# `-preset ultrafast`; lower CRF / raise maxrate for higher quality, or the reverse
+# to shrink further. Tunable via env without a code change.
+RECORDING_VIDEO_PRESET = os.getenv("RECORDING_VIDEO_PRESET", "veryfast")
+RECORDING_VIDEO_CRF = os.getenv("RECORDING_VIDEO_CRF", "28")
+RECORDING_VIDEO_MAXRATE = os.getenv("RECORDING_VIDEO_MAXRATE", "2500k")
+RECORDING_VIDEO_BUFSIZE = os.getenv("RECORDING_VIDEO_BUFSIZE", "5000k")
+RECORDING_VIDEO_FRAMERATE = os.getenv("RECORDING_VIDEO_FRAMERATE", "30")
+RECORDING_VIDEO_GOP = os.getenv("RECORDING_VIDEO_GOP", "60")
+
+# Recordings from a bot whose metadata carries a `user_id` are stored under a per-user
+# folder in the recording bucket: "{RECORDING_USER_FOLDER}/{user_id}/{filename}". Bots
+# without a user_id in metadata keep the old flat object name (unchanged), so existing
+# recordings and other API consumers are unaffected.
+RECORDING_USER_FOLDER = os.getenv("RECORDING_USER_FOLDER", "recordings")
+
 CHARGE_CREDITS_FOR_BOTS = os.getenv("CHARGE_CREDITS_FOR_BOTS", "false") == "true"
 
 BOT_POD_NAMESPACE = os.getenv("BOT_POD_NAMESPACE", "attendee")

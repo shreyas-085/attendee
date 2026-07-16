@@ -2,17 +2,23 @@ import logging
 import os
 import subprocess
 
+from django.conf import settings
+
 logger = logging.getLogger(__name__)
 
 
 class ScreenAndAudioRecorder:
-    def __init__(self, file_location, recording_dimensions, audio_only):
+    def __init__(self, file_location, recording_dimensions, audio_only, fragmented_mp4=False):
         self.file_location = file_location
         self.ffmpeg_proc = None
         # Screen will have buffer, we will crop to the recording dimensions
         self.screen_dimensions = (recording_dimensions[0] + 10, recording_dimensions[1] + 10)
         self.recording_dimensions = recording_dimensions
         self.audio_only = audio_only
+        # When True the video output is a fragmented MP4 (moov at the front, valid at
+        # every fragment boundary) so it can be streamed to storage while recording.
+        # In that mode the post-record `make_file_seekable` remux is unnecessary.
+        self.fragmented_mp4 = fragmented_mp4
         self.paused = False
         self.xterm_proc = None
 
@@ -41,7 +47,40 @@ class ScreenAndAudioRecorder:
                 self.file_location,
             ]
         else:
-            ffmpeg_cmd = ["ffmpeg", "-y", "-thread_queue_size", "256", "-framerate", "30", "-video_size", f"{self.screen_dimensions[0]}x{self.screen_dimensions[1]}", "-f", "x11grab", "-draw_mouse", "0", "-probesize", "32", "-i", display_var, "-thread_queue_size", "4096", "-f", "alsa", "-i", "default", "-vf", f"crop={self.recording_dimensions[0]}:{self.recording_dimensions[1]}:10:10", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "30", "-c:a", "aac", "-strict", "experimental", "-b:a", "128k", self.file_location]
+            # Balanced, rate-controlled x264 encode (settings-driven) instead of the old
+            # unbounded `-preset ultrafast`, to cut file size. -crf + -maxrate/-bufsize gives
+            # capped-quality VBV so pathological scenes can't balloon.
+            framerate = str(settings.RECORDING_VIDEO_FRAMERATE)
+            ffmpeg_cmd = [
+                "ffmpeg",
+                "-y",
+                "-thread_queue_size", "256",
+                "-framerate", framerate,
+                "-video_size", f"{self.screen_dimensions[0]}x{self.screen_dimensions[1]}",
+                "-f", "x11grab",
+                "-draw_mouse", "0",
+                "-probesize", "32",
+                "-i", display_var,
+                "-thread_queue_size", "4096",
+                "-f", "alsa",
+                "-i", "default",
+                "-vf", f"crop={self.recording_dimensions[0]}:{self.recording_dimensions[1]}:10:10",
+                "-c:v", "libx264",
+                "-preset", str(settings.RECORDING_VIDEO_PRESET),
+                "-crf", str(settings.RECORDING_VIDEO_CRF),
+                "-maxrate", str(settings.RECORDING_VIDEO_MAXRATE),
+                "-bufsize", str(settings.RECORDING_VIDEO_BUFSIZE),
+                "-pix_fmt", "yuv420p",
+                "-g", str(settings.RECORDING_VIDEO_GOP),
+                "-c:a", "aac",
+                "-strict", "experimental",
+                "-b:a", "128k",
+            ]
+            if self.fragmented_mp4:
+                # Fragmented MP4: self-describing at every fragment so the growing file can be
+                # streamed to storage during recording; also makes the file already faststart.
+                ffmpeg_cmd += ["-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4"]
+            ffmpeg_cmd.append(self.file_location)
 
         logger.info(f"Starting FFmpeg command: {' '.join(ffmpeg_cmd)}")
         self.ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
@@ -113,6 +152,12 @@ class ScreenAndAudioRecorder:
 
         # if audio only, we don't need to make it seekable
         if self.audio_only:
+            return
+
+        # Fragmented MP4 already has the moov at the front and is valid throughout, so the
+        # faststart remux is unnecessary (and would rewrite the file we just streamed).
+        if self.fragmented_mp4:
+            logger.info("Recording is a fragmented MP4, skipping seekability remux")
             return
 
         # if input file is greater than 3 GB, we will skip seekability
