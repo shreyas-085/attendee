@@ -534,20 +534,29 @@ class BotController:
         return f"audio-blobs/{self.bot_in_db.object_id}-{recording.object_id}/audio-chunk-{audio_chunk.id}.pcm"
 
     def get_recording_filename(self):
+        """LOCAL recording filename (flat) — also the base for the remote object key.
+
+        MUST stay flat: get_recording_file_location() joins this onto the storage dir, so a
+        folder here would make ffmpeg write to a nested path whose parent dirs don't exist
+        (ffmpeg then can't open its output and no recording is produced). The per-user folder
+        belongs only on the REMOTE key — see get_recording_object_key()."""
         recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
-        name = f"{self.bot_in_db.object_id}-{recording.object_id}.{self.bot_in_db.recording_format()}"
-        # Group recordings under a per-user folder when the bot's metadata carries a
-        # user_id: "{folder}/{user_id}/{name}". Bots without a user_id keep the old flat
-        # object name so existing recordings and other consumers are unaffected.
+        return f"{self.bot_in_db.object_id}-{recording.object_id}.{self.bot_in_db.recording_format()}"
+
+    def get_recording_object_key(self):
+        """REMOTE storage key for the recording. Groups under a per-user folder when the
+        bot's metadata carries a user_id ("{folder}/{user_id}/{name}"); flat otherwise, so
+        existing recordings and other consumers are unaffected."""
+        name = self.get_recording_filename()
         user_id = (self.bot_in_db.metadata or {}).get("user_id")
         if user_id:
             return f"{settings.RECORDING_USER_FOLDER}/{user_id}/{name}"
         return name
 
     def get_audio_recording_filename(self):
-        """Object key for the extracted audio track — same path as the video with a
+        """Remote object key for the extracted audio track — same key as the video with a
         .m4a extension (in the separate audio bucket)."""
-        root, _ext = os.path.splitext(self.get_recording_filename())
+        root, _ext = os.path.splitext(self.get_recording_object_key())
         return f"{root}.m4a"
 
     def upload_audio_recording_if_enabled(self):
@@ -660,7 +669,7 @@ class BotController:
         if settings.STORAGE_PROTOCOL == "azure":
             return AzureFileUploader(
                 container=settings.AZURE_RECORDING_STORAGE_CONTAINER_NAME,
-                filename=self.get_recording_filename(),
+                filename=self.get_recording_object_key(),
                 connection_string=settings.RECORDING_STORAGE_BACKEND.get("OPTIONS").get("connection_string"),
                 account_key=settings.RECORDING_STORAGE_BACKEND.get("OPTIONS").get("account_key"),
                 account_name=settings.RECORDING_STORAGE_BACKEND.get("OPTIONS").get("account_name"),
@@ -669,12 +678,12 @@ class BotController:
         if settings.STORAGE_PROTOCOL == "gcs":
             return GcsFileUploader(
                 bucket=settings.GS_RECORDING_BUCKET_NAME,
-                filename=self.get_recording_filename(),
+                filename=self.get_recording_object_key(),
             )
 
         return S3FileUploader(
             bucket=settings.AWS_RECORDING_STORAGE_BUCKET_NAME,
-            filename=self.get_recording_filename(),
+            filename=self.get_recording_object_key(),
             endpoint_url=settings.RECORDING_STORAGE_BACKEND.get("OPTIONS").get("endpoint_url"),
         )
 
@@ -1001,7 +1010,7 @@ class BotController:
                 # so the object is finalized within seconds of the meeting ending.
                 self.recording_stream_uploader = RecordingStreamUploader(
                     bucket=settings.GS_RECORDING_BUCKET_NAME,
-                    object_name=self.get_recording_filename(),
+                    object_name=self.get_recording_object_key(),
                     file_path=self.get_recording_file_location(),
                     flush_threshold=settings.RECORDING_STREAM_UPLOAD_CHUNK_SIZE,
                 )
