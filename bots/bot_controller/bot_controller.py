@@ -602,14 +602,29 @@ class BotController:
                 logger.exception("Failed to delete local extracted audio file")
 
     def upload_audio_only_recording(self):
-        """Upload a free-tier audio-only recording to the AUDIO bucket and record it as the
-        note's audio (recording.audio_file). No video is produced, so recording.file stays
-        empty — the recording is considered complete on audio_file (see terminate_recording).
+        """Upload a free-tier audio-only recording.
 
-        Best-effort: on failure audio_file is left unset (recording then fails as before)."""
+        On GCS the file goes to the dedicated AUDIO bucket and is recorded as the note's
+        audio (recording.audio_file); no video is produced, so recording.file stays empty and
+        the recording is considered complete on audio_file (see terminate_recording).
+
+        On non-GCS backends (s3/azure) there is no separate audio bucket, so it is uploaded
+        via the standard file uploader and recorded as recording.file — exactly as every
+        recording behaved before the audio-bucket split.
+
+        Best-effort: on failure audio_file/file is left unset (recording then fails as before)."""
         local_path = self.get_recording_file_location()
         if not local_path or not os.path.exists(local_path):
             return
+
+        if settings.STORAGE_PROTOCOL != "gcs":
+            file_uploader = self.get_file_uploader()
+            file_uploader.upload_file(local_path)
+            file_uploader.wait_for_upload()
+            file_uploader.delete_file(local_path)
+            self.recording_file_saved(file_uploader.filename)
+            return
+
         try:
             audio_key = self.get_recording_object_key()
             uploader = GcsFileUploader(bucket=settings.GS_AUDIO_RECORDING_BUCKET_NAME, filename=audio_key)
