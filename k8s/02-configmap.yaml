@@ -44,4 +44,7 @@ data:
   # Storage — native GCS via Workload Identity (no keys; signed URLs via IAM SignBlob).
   STORAGE_PROTOCOL: "gcs"
   GS_PROJECT_ID: "lynkk-502014"
+  # Video recordings (Pro) → recordings bucket; audio (everyone / extracted) → audio bucket.
+  # Both keyed as {user_id}/{name}; 14-day delete lifecycle set on each bucket.
   GS_RECORDING_BUCKET_NAME: "lynkk-attendee-recordings"
+  GS_AUDIO_RECORDING_BUCKET_NAME: "lynkk-attendee-audio"

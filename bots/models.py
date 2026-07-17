@@ -868,9 +868,13 @@ class Bot(models.Model):
                 recording.audio_chunks.all().delete()
                 recording.utterances.all().delete()
 
-                # Delete the actual recording file if it exists
+                # Delete the actual recording file(s) if they exist — video (recording.file)
+                # and the audio track (recording.audio_file, in the audio bucket; the only
+                # file for audio-only recordings).
                 if recording.file and recording.file.name:
                     recording.file.delete()
+                if recording.audio_file and recording.audio_file.name:
+                    recording.audio_file.delete()
 
             # Delete all participants
             self.participants.all().delete()
@@ -2341,7 +2345,9 @@ class RecordingManager:
     def terminate_recording(cls, recording: Recording):
         if recording.state == RecordingStates.IN_PROGRESS or recording.state == RecordingStates.PAUSED:
             # If we don't have a recording file AND we intended to generate one, then it failed.
-            if recording.file or recording.bot.recording_type() == RecordingTypes.NO_RECORDING:
+            # An audio-only (free-tier) recording lands in audio_file (audio bucket) with no
+            # video file, so treat audio_file as an equally valid "we produced a recording".
+            if recording.file or recording.audio_file or recording.bot.recording_type() == RecordingTypes.NO_RECORDING:
                 RecordingManager.set_recording_complete(recording)
             else:
                 RecordingManager.set_recording_failed(recording)

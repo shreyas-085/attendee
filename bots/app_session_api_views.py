@@ -187,8 +187,8 @@ class AppSessionMediaView(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            recording_file = recording.file
-            if not recording_file:
+            # Available if there's a video file OR an audio-only file (audio bucket).
+            if not recording.file and not recording.audio_file:
                 return Response(
                     {"error": "No media file found for app session"},
                     status=status.HTTP_404_NOT_FOUND,

@@ -545,19 +545,24 @@ class BotController:
 
     def get_recording_object_key(self):
         """REMOTE storage key for the recording. Groups under a per-user folder when the
-        bot's metadata carries a user_id ("{folder}/{user_id}/{name}"); flat otherwise, so
-        existing recordings and other consumers are unaffected."""
+        bot's metadata carries a user_id ("{user_id}/{name}"); flat otherwise. The bucket
+        (video vs audio) conveys the media type, so no extra prefix is used."""
         name = self.get_recording_filename()
         user_id = (self.bot_in_db.metadata or {}).get("user_id")
         if user_id:
-            return f"{settings.RECORDING_USER_FOLDER}/{user_id}/{name}"
+            return f"{user_id}/{name}"
         return name
 
     def get_audio_recording_filename(self):
-        """Remote object key for the extracted audio track — same key as the video with a
-        .m4a extension (in the separate audio bucket)."""
+        """Remote object key (audio bucket) for the extracted audio track — same key as the
+        video with a .m4a extension."""
         root, _ext = os.path.splitext(self.get_recording_object_key())
         return f"{root}.m4a"
+
+    def _is_audio_only_recording(self):
+        """True when the bot is capturing audio only (no video track) — i.e. a free-tier
+        recording. Such recordings are the audio itself and go to the audio bucket."""
+        return not (self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video)
 
     def upload_audio_recording_if_enabled(self):
         """Extract the audio track from the finished video and upload it to the audio
@@ -595,6 +600,28 @@ class BotController:
                     os.remove(local_audio_path)
             except Exception:
                 logger.exception("Failed to delete local extracted audio file")
+
+    def upload_audio_only_recording(self):
+        """Upload a free-tier audio-only recording to the AUDIO bucket and record it as the
+        note's audio (recording.audio_file). No video is produced, so recording.file stays
+        empty — the recording is considered complete on audio_file (see terminate_recording).
+
+        Best-effort: on failure audio_file is left unset (recording then fails as before)."""
+        local_path = self.get_recording_file_location()
+        if not local_path or not os.path.exists(local_path):
+            return
+        try:
+            audio_key = self.get_recording_object_key()
+            uploader = GcsFileUploader(bucket=settings.GS_AUDIO_RECORDING_BUCKET_NAME, filename=audio_key)
+            uploader.upload_file(local_path)
+            uploader.wait_for_upload()
+            recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
+            recording.audio_file = audio_key
+            recording.save(update_fields=["audio_file", "updated_at", "version"])
+            logger.info(f"Uploaded audio-only recording to gs://{settings.GS_AUDIO_RECORDING_BUCKET_NAME}/{audio_key}")
+            uploader.delete_file(local_path)
+        except Exception:
+            logger.exception("Failed to upload audio-only recording")
 
     def _extract_audio_track(self, video_path, audio_path):
         """Strip the audio track into an .m4a. Stream-copies the existing AAC track (near
@@ -660,10 +687,11 @@ class BotController:
     def should_stream_recording_upload(self):
         """Whether to stream the recording to GCS during the meeting (vs. upload at the end).
 
-        Only the native-GCS protocol supports the resumable streaming path, and there must be
-        a local recording file to tail.
+        Only for native-GCS VIDEO recordings (the fragmented-MP4 streaming path); there must
+        be a local recording file to tail. Audio-only (free) recordings go straight to the
+        audio bucket at the end.
         """
-        return settings.ENABLE_STREAMING_RECORDING_UPLOAD and settings.STORAGE_PROTOCOL == "gcs" and self.get_recording_file_location() is not None
+        return settings.ENABLE_STREAMING_RECORDING_UPLOAD and settings.STORAGE_PROTOCOL == "gcs" and not self._is_audio_only_recording() and self.get_recording_file_location() is not None
 
     def get_file_uploader(self):
         if settings.STORAGE_PROTOCOL == "azure":
@@ -745,34 +773,40 @@ class BotController:
         if self.get_recording_file_location():
             self.upload_recording_to_external_media_storage_if_enabled()
 
-            # Extract + upload the small audio track (for fast transcription) while the local
-            # video file is still present, before it gets uploaded/deleted below.
-            self.upload_audio_recording_if_enabled()
+            if self._is_audio_only_recording():
+                # Free tier: the recording is audio only → straight to the audio bucket as
+                # the note's audio (no video, no separate extraction).
+                logger.info("Uploading audio-only recording to the audio bucket...")
+                self.upload_audio_only_recording()
+            else:
+                # Pro tier: extract + upload the small audio track (for fast transcription)
+                # while the local video file is present, then upload the video itself.
+                self.upload_audio_recording_if_enabled()
 
-            streamed = False
-            if self.recording_stream_uploader:
-                # The recording has been streaming to GCS during the meeting; ffmpeg has now
-                # stopped (screen_and_audio_recorder.cleanup above), so drain the final bytes
-                # and finalize the object. On any failure we fall back to the end-of-meeting
-                # uploader below so a recording is never lost.
-                logger.info("Finalizing streaming recording upload...")
-                streamed = self.recording_stream_uploader.stop_and_finalize()
-                if streamed:
-                    logger.info("Streaming recording upload finalized")
-                    self.recording_file_saved(self.recording_stream_uploader.filename)
-                    self._delete_local_recording_file()
-                else:
-                    logger.warning("Streaming recording upload failed; falling back to end-of-meeting upload")
+                streamed = False
+                if self.recording_stream_uploader:
+                    # The recording has been streaming to GCS during the meeting; ffmpeg has
+                    # now stopped (screen_and_audio_recorder.cleanup above), so drain the final
+                    # bytes and finalize. On any failure we fall back to the end-of-meeting
+                    # uploader below so a recording is never lost.
+                    logger.info("Finalizing streaming recording upload...")
+                    streamed = self.recording_stream_uploader.stop_and_finalize()
+                    if streamed:
+                        logger.info("Streaming recording upload finalized")
+                        self.recording_file_saved(self.recording_stream_uploader.filename)
+                        self._delete_local_recording_file()
+                    else:
+                        logger.warning("Streaming recording upload failed; falling back to end-of-meeting upload")
 
-            if not streamed:
-                logger.info("Telling file uploader to upload recording file...")
-                file_uploader = self.get_file_uploader()
-                file_uploader.upload_file(self.get_recording_file_location())
-                file_uploader.wait_for_upload()
-                logger.info("File uploader finished uploading file")
-                file_uploader.delete_file(self.get_recording_file_location())
-                logger.info("File uploader deleted file from local filesystem")
-                self.recording_file_saved(file_uploader.filename)
+                if not streamed:
+                    logger.info("Telling file uploader to upload recording file...")
+                    file_uploader = self.get_file_uploader()
+                    file_uploader.upload_file(self.get_recording_file_location())
+                    file_uploader.wait_for_upload()
+                    logger.info("File uploader finished uploading file")
+                    file_uploader.delete_file(self.get_recording_file_location())
+                    logger.info("File uploader deleted file from local filesystem")
+                    self.recording_file_saved(file_uploader.filename)
 
         if self.bot_in_db.create_debug_recording():
             self.save_debug_recording()

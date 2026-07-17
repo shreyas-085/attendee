@@ -723,8 +723,9 @@ class RecordingView(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            recording_file = recording.file
-            if not recording_file:
+            # A recording is available if it has a video file OR an audio-only file
+            # (free-tier recordings have only audio_file, in the audio bucket).
+            if not recording.file and not recording.audio_file:
                 return Response(
                     {"error": "No recording file found for bot"},
                     status=status.HTTP_404_NOT_FOUND,
