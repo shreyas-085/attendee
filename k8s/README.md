@@ -14,10 +14,15 @@ Secret Manager add-on, and Artifact Registry.
   (gunicorn), `attendee-worker` (celery), `attendee-scheduler`, `redis` (in-cluster).
 - **Bot pods** (`attendee-bots` pool, `e2-standard-4`, autoscaled **min 0 / max 2**,
   tainted): one ephemeral pod per meeting, created by the control plane via the k8s
-  API (`LAUNCH_BOT_METHOD=kubernetes`), torn down at meeting end. The pool **scales to
-  zero** between meetings, so there is no idle bot-node cost. Pods are targeted onto
-  the pool by the `BOT_POD_SPEC_DEFAULT` nodeSelector/toleration patch in
+  API (`LAUNCH_BOT_METHOD=kubernetes`), torn down at meeting end. Pods are targeted
+  onto the pool by the `BOT_POD_SPEC_DEFAULT` nodeSelector/toleration patch in
   `02-configmap.yaml`.
+- **Warm bot capacity** (`11-bot-warm-pool.yaml`): a below-default-priority
+  "balloon" pod holds one bot-sized slot (and the pre-pulled attendee image) on the
+  bot pool 24/7, so a new bot pod preempts it and joins in seconds instead of
+  waiting ~2-4 min for node scale-up + image pull. The evicted balloon re-warms the
+  next node in the background. Costs one idle `e2-standard-4`; delete the
+  `bot-balloon` Deployment to go back to scale-to-zero.
 - **Postgres**: Cloud SQL `attendee-pg` (`db-g1-small`, 10 GB) on a **private IP**,
   direct `sslmode=require` (no proxy — works for the dynamic bot pods too).
 - **Redis**: in-cluster (`04-redis.yaml`), image from `mirror.gcr.io` (no Docker Hub
@@ -78,18 +83,28 @@ Secret Manager add-on, and Artifact Registry.
 
 - `kubectl -n attendee get deploy,po,svc,ingress,job` healthy; cert `Active`;
   `https://attendee.capturemeet.dev/health/` → 200.
-- `POST /api/v1/bots` (recording) → a bot pod appears on `attendee-bots`
-  (`kubectl get po -n attendee -o wide`; the pool scales 0→1), joins a test Google
-  Meet, recording lands in `gs://lynkk-attendee-recordings`, pod deleted at end, node
-  scales back to 0.
+- Warm pool: `kubectl -n attendee get po -l app=bot-balloon -o wide` shows the
+  balloon `Running` on an `attendee-bots` node.
+- `POST /api/v1/bots` (recording) → the bot pod appears on `attendee-bots` and
+  starts within seconds (`kubectl get po -n attendee -o wide`; the balloon is
+  preempted, goes Pending, and re-warms a second node), joins a test Google Meet,
+  recording lands in `gs://lynkk-attendee-recordings`, pod deleted at end, the
+  spare node drains back down leaving one warm node.
 - **2-way**: bot-create with `websocket_settings.audio.url=wss://…` against a test WS
   echo → inbound `realtime_audio.mixed`, accepted `realtime_audio.bot_output`.
 
 ## Open items / gotchas
 
-- **Cost**: idle cost is one `e2-standard-2` control node + `db-g1-small` + the GCLB
-  forwarding rule + static IP. The bot pool is min-0, so bot nodes only exist during
-  meetings. Scale up (`n2` bots, more control CPU) only after a load test.
+- **Cost**: idle cost is one `e2-standard-2` control node + **one `e2-standard-4`
+  warm bot node** (the `bot-balloon` in `11-bot-warm-pool.yaml`; delete that
+  Deployment to return the bot pool to min-0/scale-to-zero) + `db-g1-small` + the
+  GCLB forwarding rule + static IP. Scale up (`n2` bots, more control CPU) only
+  after a load test.
+- **Warm slot during concurrency**: with `--max-nodes=2`, once 2 meetings run
+  concurrently the balloon stays Pending and the warm slot is gone until a meeting
+  ends. Raise the pool (`gcloud container node-pools update attendee-bots
+  --cluster=attendee-cluster --zone=asia-south1-a --enable-autoscaling
+  --min-nodes=0 --max-nodes=3`) to keep a warm slot under 2-meeting load.
 - **DB SSL**: `production-gke.py` forces `ssl_require=True`; the private-IP design
   satisfies it (real TLS to Cloud SQL).
 - **Bot resources**: `BOT_CPU_REQUEST=2`, `BOT_MEMORY_REQUEST=4Gi` → one bot per

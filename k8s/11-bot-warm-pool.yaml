@@ -1,0 +1,82 @@
+# Warm bot capacity ("balloon" overprovisioning pattern).
+#
+# Keeps ONE bot-sized slot warm on the attendee-bots pool at all times so a new
+# bot pod schedules instantly instead of waiting ~2-4 min for node scale-up +
+# image pull. How it works:
+#
+#   - The balloon pod requests the same resources as a bot pod (cpu/mem/
+#     ephemeral, see BOT_* in 02-configmap.yaml) on the tainted bot pool, which
+#     forces the autoscaler to keep one e2-standard-4 node up.
+#   - Its PriorityClass value (-1) is below the default pod priority (0) that
+#     real bot pods run at, so the scheduler PREEMPTS the balloon the moment a
+#     bot pod arrives — the bot takes the warm node immediately.
+#   - The evicted balloon goes Pending, which triggers scale-up of the NEXT
+#     warm node in the background (value -1 is above the autoscaler's
+#     expendable-pods cutoff of -10, so it still counts for scale-up).
+#   - It runs the real attendee image (sleeping), so the multi-GB bot image is
+#     already pulled/cached on the warm node — the bot container starts in
+#     seconds even though the launcher uses imagePullPolicy Always (same tag →
+#     layers cached, only the manifest is re-checked).
+#
+# Cost: one idle e2-standard-4 24/7. NOTE: with the pool at max-nodes=2, the
+# warm node is only re-created while <2 meetings are running; raise the pool to
+# --max-nodes=3 if you want a warm slot even during 2 concurrent meetings.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: bot-balloon
+value: -1
+globalDefault: false
+preemptionPolicy: Never # the balloon itself must never preempt anything
+description: "Below-default priority for warm-capacity balloon pods; preempted by real bot pods."
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bot-balloon
+  namespace: attendee
+  labels:
+    app: bot-balloon
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bot-balloon
+  template:
+    metadata:
+      labels:
+        app: bot-balloon
+      annotations:
+        # Only the scheduler (preemption) may take this node, not autoscaler
+        # bin-packing — keeps the warm node from being consolidated away.
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+    spec:
+      priorityClassName: bot-balloon
+      terminationGracePeriodSeconds: 0 # vacate the slot instantly on preemption
+      # Mirror the BOT_POD_SPEC_DEFAULT patch so the balloon lands exactly
+      # where bot pods land.
+      nodeSelector:
+        workload: bot
+      tolerations:
+        - key: workload
+          operator: Equal
+          value: bot
+          effect: NoSchedule
+      containers:
+        - name: balloon
+          # Real attendee image (not pause) so the node has it pre-pulled.
+          # :GITSHA is replaced per-commit by the same sed as the other manifests,
+          # so each release re-warms the node with the new image before any meeting.
+          image: asia-south1-docker.pkg.dev/lynkk-502014/attendee/attendee:GITSHA
+          command: ["sleep", "infinity"]
+          resources:
+            # Must be >= a bot pod's requests (02-configmap.yaml BOT_* +
+            # BOT_EPHEMERAL_STORAGE_REQUEST default 10Gi) so the freed slot is
+            # guaranteed to fit the incoming bot pod.
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+              ephemeral-storage: "10Gi"
+            limits:
+              memory: "4Gi"
+              ephemeral-storage: "10Gi"
